@@ -1,5 +1,5 @@
 const express = require('express');
-const { quais } = require('quais');
+const quais = require('quais');
 const app = express();
 
 // Allow your Android app to connect
@@ -24,10 +24,11 @@ app.post('/sign-transaction', async (req, res) => {
     console.log('To:', to);
     console.log('Value:', value, 'Wei');
     console.log('Nonce:', nonce);
+    console.log('Chain ID:', chainId);
     console.log('RPC:', rpcUrl);
     
-    // Create provider
-    const provider = new quais.providers.JsonRpcProvider(rpcUrl);
+    // FIXED: Correct way to import JsonRpcProvider from quais
+    const provider = new quais.JsonRpcProvider(rpcUrl);
     
     // Create wallet from private key
     const wallet = new quais.Wallet(privateKey, provider);
@@ -44,7 +45,7 @@ app.post('/sign-transaction', async (req, res) => {
       chainId: parseInt(chainId)
     };
     
-    console.log('📝 Transaction object:', tx);
+    console.log('📝 Transaction object:', JSON.stringify(tx, null, 2));
     console.log('🔐 Signing and sending transaction...');
     
     // Sign and send (quais.js handles Protobuf encoding automatically)
@@ -71,4 +72,6 @@ app.post('/sign-transaction', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Quai encoding service running on port ${PORT}`);
+  console.log(`📍 Health check: http://localhost:${PORT}/`);
+  console.log(`📍 Sign endpoint: http://localhost:${PORT}/sign-transaction`);
 });

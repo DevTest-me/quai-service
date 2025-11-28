@@ -27,7 +27,7 @@ app.post('/sign-transaction', async (req, res) => {
     console.log('Chain ID:', chainId);
     console.log('RPC:', rpcUrl);
     
-    // FIXED: Correct way to import JsonRpcProvider from quais
+    // Create provider
     const provider = new quais.JsonRpcProvider(rpcUrl);
     
     // Create wallet from private key
@@ -35,14 +35,16 @@ app.post('/sign-transaction', async (req, res) => {
     
     console.log('✅ Wallet created:', wallet.address);
     
-    // Build transaction object
+    // FIXED: Convert values to proper format for quais.js
+    // quais.js expects BigInt or hex strings for large numbers
     const tx = {
       to: to,
-      value: value,
+      value: BigInt(value).toString(), // Convert to string representation of BigInt
       nonce: parseInt(nonce),
-      gasPrice: gasPrice,
+      gasPrice: BigInt(gasPrice).toString(), // Convert to string representation of BigInt
       gasLimit: parseInt(gasLimit),
-      chainId: parseInt(chainId)
+      chainId: parseInt(chainId),
+      type: 0 // Explicitly set transaction type to Legacy (Type 0)
     };
     
     console.log('📝 Transaction object:', JSON.stringify(tx, null, 2));
@@ -53,6 +55,7 @@ app.post('/sign-transaction', async (req, res) => {
     
     console.log('✅ Transaction sent successfully!');
     console.log('TX Hash:', txResponse.hash);
+    console.log('TX Response:', JSON.stringify(txResponse, null, 2));
     
     res.json({ 
       success: true,
@@ -61,10 +64,12 @@ app.post('/sign-transaction', async (req, res) => {
     
   } catch (error) {
     console.error('❌ Error:', error.message);
+    console.error('Error code:', error.code);
     console.error('Stack:', error.stack);
     res.status(500).json({ 
       success: false,
-      error: error.message 
+      error: error.message,
+      code: error.code
     });
   }
 });

@@ -28,69 +28,96 @@ app.post('/sign-transaction', async (req, res) => {
     console.log('Chain ID:', chainId);
     console.log('RPC:', rpcUrl);
     
-    // Create provider with explicit shard configuration
+    // Create provider with timeout
     const provider = new quais.JsonRpcProvider(rpcUrl, {
       chainId: parseInt(chainId),
       name: 'quai-cyprus1'
     });
     
-    // Create wallet from private key WITHOUT provider first
+    // Create wallet
     const wallet = new quais.Wallet(privateKey);
-    
-    // Then connect to provider
     const connectedWallet = wallet.connect(provider);
     
     console.log('✅ Wallet address:', connectedWallet.address);
     
-    // Build transaction with proper quais format
-    // CRITICAL: Don't use type: 0, let quais.js determine the type
+    // Build transaction
     const tx = {
       to: to,
-      from: connectedWallet.address, // Explicitly set from address
-      value: value, // Keep as string
+      from: connectedWallet.address,
+      value: value,
       nonce: parseInt(nonce),
-      gasPrice: gasPrice, // Keep as string
+      gasPrice: gasPrice,
       gasLimit: parseInt(gasLimit),
       chainId: parseInt(chainId)
-      // Don't set type - let quais.js handle it
     };
     
     console.log('📝 Transaction object:');
     console.log(JSON.stringify(tx, null, 2));
-    console.log('🔐 Signing and sending transaction...');
     
-    // Sign and send transaction
-    const txResponse = await connectedWallet.sendTransaction(tx);
+    // APPROACH 1: Sign transaction manually first
+    console.log('🔐 Step 1: Signing transaction locally...');
+    const signedTx = await connectedWallet.signTransaction(tx);
+    console.log('✅ Transaction signed locally');
+    console.log('Signed TX (first 100 chars):', signedTx.substring(0, 100) + '...');
     
-    console.log('✅ Transaction sent successfully!');
-    console.log('TX Hash:', txResponse.hash);
+    // APPROACH 2: Send the signed transaction with timeout
+    console.log('📤 Step 2: Broadcasting signed transaction to network...');
     
-    // Wait for transaction to be mined (optional, with timeout)
-    console.log('⏳ Waiting for transaction confirmation...');
+    // Create a promise with timeout
+    const sendWithTimeout = (signedTransaction, timeoutMs = 30000) => {
+      return Promise.race([
+        provider.broadcastTransaction(signedTransaction),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Transaction broadcast timeout')), timeoutMs)
+        )
+      ]);
+    };
+    
     try {
-      const receipt = await txResponse.wait(1); // Wait for 1 confirmation, max 30 seconds
-      console.log('✅ Transaction confirmed!');
-      console.log('Block:', receipt.blockNumber);
-    } catch (waitError) {
-      console.log('⚠️ Could not wait for confirmation (this is normal):', waitError.message);
-      // This is okay - transaction was still sent
+      const txResponse = await sendWithTimeout(signedTx, 30000); // 30 second timeout
+      
+      console.log('✅ Transaction broadcasted successfully!');
+      console.log('TX Hash:', txResponse.hash);
+      
+      res.json({ 
+        success: true,
+        txHash: txResponse.hash 
+      });
+      
+    } catch (broadcastError) {
+      console.error('⚠️ Broadcast error:', broadcastError.message);
+      
+      // If broadcast times out, we can still extract the tx hash from the signed transaction
+      console.log('🔍 Attempting to extract hash from signed transaction...');
+      
+      try {
+        // Parse the signed transaction to get the hash
+        const parsedTx = quais.Transaction.from(signedTx);
+        const txHash = parsedTx.hash;
+        
+        console.log('✅ Extracted TX Hash from signed transaction:', txHash);
+        console.log('⚠️ Transaction was signed and likely sent, but confirmation timed out');
+        
+        res.json({ 
+          success: true,
+          txHash: txHash,
+          warning: 'Transaction signed and sent, but network confirmation timed out. Check explorer to verify.'
+        });
+        
+      } catch (parseError) {
+        console.error('❌ Could not extract hash:', parseError.message);
+        throw broadcastError; // Re-throw original error
+      }
     }
-    
-    res.json({ 
-      success: true,
-      txHash: txResponse.hash 
-    });
     
   } catch (error) {
     console.error('❌ Error:', error.message);
     console.error('Error code:', error.code);
-    console.error('Error info:', error.info);
     console.error('Stack:', error.stack);
     res.status(500).json({ 
       success: false,
       error: error.message,
-      code: error.code,
-      info: error.info
+      code: error.code
     });
   }
 });

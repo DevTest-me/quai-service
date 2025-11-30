@@ -37,7 +37,7 @@ function makeRpcCall(rpcUrl, method, params) {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(postData)
       },
-      timeout: 30000 // 30 second timeout
+      timeout: 30000
     };
 
     const client = url.protocol === 'https:' ? https : http;
@@ -114,31 +114,63 @@ app.post('/sign-transaction', async (req, res) => {
     console.log('✅ Transaction signed successfully!');
     console.log('Signed TX (Protobuf):', signedTx.substring(0, 150) + '...');
     console.log('Full signed TX length:', signedTx.length, 'chars');
+    console.log('Full signed TX:', signedTx); // Log complete signed transaction
     
-    // Broadcast using direct RPC call instead of quais.js
-    console.log('📤 Broadcasting via direct RPC call...');
+    // Broadcast using direct RPC call
+    console.log('📤 Broadcasting via direct RPC call to:', rpcUrl);
     
     try {
       const txHash = await makeRpcCall(rpcUrl, 'quai_sendRawTransaction', [signedTx]);
       
-      console.log('✅ Transaction broadcasted successfully!');
+      console.log('✅ Transaction accepted by node!');
       console.log('TX Hash:', txHash);
+      
+      // Verify transaction was accepted
+      console.log('🔍 Verifying transaction on network...');
+      
+      try {
+        // Wait a moment for the transaction to propagate
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Try to get transaction receipt
+        const txReceipt = await makeRpcCall(rpcUrl, 'quai_getTransactionByHash', [txHash]);
+        
+        if (txReceipt) {
+          console.log('✅ Transaction confirmed on network!');
+          console.log('Transaction details:', JSON.stringify(txReceipt, null, 2));
+        } else {
+          console.log('⚠️ Transaction not yet visible on network (may take time to propagate)');
+        }
+      } catch (verifyError) {
+        console.log('⚠️ Could not verify transaction immediately:', verifyError.message);
+        console.log('This is normal - transaction may still be propagating');
+      }
+      
+      // Check the balance to see if transaction affected it
+      console.log('🔍 Checking sender balance...');
+      try {
+        const balance = await makeRpcCall(rpcUrl, 'quai_getBalance', [connectedWallet.address, 'latest']);
+        console.log('Sender balance:', balance);
+      } catch (balanceError) {
+        console.log('⚠️ Could not check balance:', balanceError.message);
+      }
       
       res.json({ 
         success: true,
-        txHash: txHash 
+        txHash: txHash,
+        signedTransaction: signedTx,
+        explorerUrl: `https://quaiscan.io/tx/${txHash}`
       });
       
     } catch (broadcastError) {
       console.error('❌ Broadcast error:', broadcastError.message);
+      console.error('Error details:', broadcastError);
       
-      // Even if broadcast fails, we have the signed transaction
-      // The user can manually broadcast it or check if it went through
       res.status(500).json({ 
         success: false,
         error: broadcastError.message,
-        signedTransaction: signedTx, // Return signed tx so it can be manually broadcasted if needed
-        info: 'Transaction was signed but broadcast failed. The signed transaction is included in the response.'
+        signedTransaction: signedTx,
+        info: 'Transaction was signed but broadcast failed. Try broadcasting manually: ' + signedTx
       });
     }
     

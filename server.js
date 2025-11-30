@@ -1,5 +1,7 @@
 const express = require('express');
 const quais = require('quais');
+const https = require('https');
+const http = require('http');
 const app = express();
 
 // Allow your Android app to connect
@@ -15,6 +17,59 @@ app.get('/', (req, res) => {
   res.json({ status: 'Quai Service is running!' });
 });
 
+// Helper function to make RPC calls directly
+function makeRpcCall(rpcUrl, method, params) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(rpcUrl);
+    const postData = JSON.stringify({
+      jsonrpc: '2.0',
+      method: method,
+      params: params,
+      id: 1
+    });
+
+    const options = {
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      },
+      timeout: 30000 // 30 second timeout
+    };
+
+    const client = url.protocol === 'https:' ? https : http;
+    
+    const req = client.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.error) {
+            reject(new Error(parsed.error.message || JSON.stringify(parsed.error)));
+          } else {
+            resolve(parsed.result);
+          }
+        } catch (e) {
+          reject(new Error(`Failed to parse response: ${data}`));
+        }
+      });
+    });
+
+    req.on('error', (error) => reject(error));
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('RPC request timeout'));
+    });
+
+    req.write(postData);
+    req.end();
+  });
+}
+
 // Main transaction signing endpoint
 app.post('/sign-transaction', async (req, res) => {
   try {
@@ -28,7 +83,7 @@ app.post('/sign-transaction', async (req, res) => {
     console.log('Chain ID:', chainId);
     console.log('RPC:', rpcUrl);
     
-    // Create provider with timeout
+    // Create provider
     const provider = new quais.JsonRpcProvider(rpcUrl, {
       chainId: parseInt(chainId),
       name: 'quai-cyprus1'
@@ -51,73 +106,48 @@ app.post('/sign-transaction', async (req, res) => {
       chainId: parseInt(chainId)
     };
     
-    console.log('📝 Transaction object:');
-    console.log(JSON.stringify(tx, null, 2));
+    console.log('📝 Transaction object:', JSON.stringify(tx, null, 2));
     
-    // APPROACH 1: Sign transaction manually first
-    console.log('🔐 Step 1: Signing transaction locally...');
+    // Sign transaction
+    console.log('🔐 Signing transaction with quais.js (Protobuf encoding)...');
     const signedTx = await connectedWallet.signTransaction(tx);
-    console.log('✅ Transaction signed locally');
-    console.log('Signed TX (first 100 chars):', signedTx.substring(0, 100) + '...');
+    console.log('✅ Transaction signed successfully!');
+    console.log('Signed TX (Protobuf):', signedTx.substring(0, 150) + '...');
+    console.log('Full signed TX length:', signedTx.length, 'chars');
     
-    // APPROACH 2: Send the signed transaction with timeout
-    console.log('📤 Step 2: Broadcasting signed transaction to network...');
-    
-    // Create a promise with timeout
-    const sendWithTimeout = (signedTransaction, timeoutMs = 30000) => {
-      return Promise.race([
-        provider.broadcastTransaction(signedTransaction),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Transaction broadcast timeout')), timeoutMs)
-        )
-      ]);
-    };
+    // Broadcast using direct RPC call instead of quais.js
+    console.log('📤 Broadcasting via direct RPC call...');
     
     try {
-      const txResponse = await sendWithTimeout(signedTx, 30000); // 30 second timeout
+      const txHash = await makeRpcCall(rpcUrl, 'quai_sendRawTransaction', [signedTx]);
       
       console.log('✅ Transaction broadcasted successfully!');
-      console.log('TX Hash:', txResponse.hash);
+      console.log('TX Hash:', txHash);
       
       res.json({ 
         success: true,
-        txHash: txResponse.hash 
+        txHash: txHash 
       });
       
     } catch (broadcastError) {
-      console.error('⚠️ Broadcast error:', broadcastError.message);
+      console.error('❌ Broadcast error:', broadcastError.message);
       
-      // If broadcast times out, we can still extract the tx hash from the signed transaction
-      console.log('🔍 Attempting to extract hash from signed transaction...');
-      
-      try {
-        // Parse the signed transaction to get the hash
-        const parsedTx = quais.Transaction.from(signedTx);
-        const txHash = parsedTx.hash;
-        
-        console.log('✅ Extracted TX Hash from signed transaction:', txHash);
-        console.log('⚠️ Transaction was signed and likely sent, but confirmation timed out');
-        
-        res.json({ 
-          success: true,
-          txHash: txHash,
-          warning: 'Transaction signed and sent, but network confirmation timed out. Check explorer to verify.'
-        });
-        
-      } catch (parseError) {
-        console.error('❌ Could not extract hash:', parseError.message);
-        throw broadcastError; // Re-throw original error
-      }
+      // Even if broadcast fails, we have the signed transaction
+      // The user can manually broadcast it or check if it went through
+      res.status(500).json({ 
+        success: false,
+        error: broadcastError.message,
+        signedTransaction: signedTx, // Return signed tx so it can be manually broadcasted if needed
+        info: 'Transaction was signed but broadcast failed. The signed transaction is included in the response.'
+      });
     }
     
   } catch (error) {
     console.error('❌ Error:', error.message);
-    console.error('Error code:', error.code);
     console.error('Stack:', error.stack);
     res.status(500).json({ 
       success: false,
-      error: error.message,
-      code: error.code
+      error: error.message
     });
   }
 });

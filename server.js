@@ -73,7 +73,7 @@ function makeRpcCall(rpcUrl, method, params) {
 // Main transaction signing endpoint
 app.post('/sign-transaction', async (req, res) => {
   try {
-    const { privateKey, to, value, nonce, gasPrice, gasLimit, chainId, rpcUrl } = req.body;
+    const { privateKey, to, value, nonce, gasPrice, gasLimit, chainId, rpcUrl, data } = req.body;
     
     console.log('📥 Received transaction request');
     console.log('From PK (first 10 chars):', privateKey.substring(0, 10) + '...');
@@ -82,6 +82,7 @@ app.post('/sign-transaction', async (req, res) => {
     console.log('Nonce:', nonce);
     console.log('Chain ID:', chainId);
     console.log('RPC:', rpcUrl);
+    console.log('Data (memo):', data || 'none');
     
     // Create provider
     const provider = new quais.JsonRpcProvider(rpcUrl, {
@@ -95,7 +96,7 @@ app.post('/sign-transaction', async (req, res) => {
     
     console.log('✅ Wallet address:', connectedWallet.address);
     
-    // Build transaction
+    // Build transaction object
     const tx = {
       to: to,
       from: connectedWallet.address,
@@ -106,15 +107,21 @@ app.post('/sign-transaction', async (req, res) => {
       chainId: parseInt(chainId)
     };
     
-    console.log('📝 Transaction object:', JSON.stringify(tx, null, 2));
+    // === CRITICAL: Add data field if provided (for memo tag) ===
+    if (data && data !== '0x' && data !== '') {
+      tx.data = data;
+      console.log('📝 Including memo data in transaction:', data);
+    }
+    
+    console.log('📝 Full transaction object:', JSON.stringify(tx, null, 2));
     
     // Sign transaction
     console.log('🔐 Signing transaction with quais.js (Protobuf encoding)...');
     const signedTx = await connectedWallet.signTransaction(tx);
     console.log('✅ Transaction signed successfully!');
-    console.log('Signed TX (Protobuf):', signedTx.substring(0, 150) + '...');
+    console.log('Signed TX (Protobuf - first 150 chars):', signedTx.substring(0, 150) + '...');
     console.log('Full signed TX length:', signedTx.length, 'chars');
-    console.log('Full signed TX:', signedTx); // Log complete signed transaction
+    console.log('Full signed TX:', signedTx);
     
     // Broadcast using direct RPC call
     console.log('📤 Broadcasting via direct RPC call to:', rpcUrl);
